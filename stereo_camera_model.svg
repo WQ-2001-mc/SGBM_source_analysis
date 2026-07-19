@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="620" viewBox="0 0 980 620">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="rayArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <style>
+      .title { font: 700 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .label { font: 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .small { font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .tiny { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .axis { stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .dim { stroke: #64748b; stroke-width: 1.8; marker-start: url(#arrow); marker-end: url(#arrow); }
+      .line { stroke: #334155; stroke-width: 2; fill: none; }
+      .dash { stroke: #94a3b8; stroke-width: 1.6; stroke-dasharray: 6 5; fill: none; }
+      .ray { stroke: #2563eb; stroke-width: 2.2; fill: none; marker-end: url(#rayArrow); }
+      .plane { stroke: #0f766e; stroke-width: 4; stroke-linecap: round; }
+      .point { fill: #dc2626; stroke: #7f1d1d; stroke-width: 1.5; }
+      .cam { fill: #f8fafc; stroke: #0f172a; stroke-width: 2; }
+      .note { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; rx: 10; }
+    </style>
+  </defs>
+
+  <rect width="980" height="620" fill="#ffffff"/>
+  <text x="36" y="42" class="title">双目 IR 相机针孔模型示意（极线校正后，俯视 X-Z 平面）</text>
+
+  <!-- Coordinate axes -->
+  <line x1="80" y1="520" x2="220" y2="520" class="axis"/>
+  <line x1="80" y1="520" x2="80" y2="380" class="axis"/>
+  <text x="228" y="526" class="label">X</text>
+  <text x="72" y="372" class="label">Z</text>
+  <text x="36" y="552" class="tiny">Z 方向为目标深度，X 方向为左右相机基线方向</text>
+
+  <!-- Camera centers -->
+  <circle cx="300" cy="470" r="10" class="cam"/>
+  <circle cx="620" cy="470" r="10" class="cam"/>
+  <text x="254" y="500" class="label">左相机光心 C_L</text>
+  <text x="574" y="500" class="label">右相机光心 C_R</text>
+
+  <!-- Baseline -->
+  <line x1="300" y1="470" x2="620" y2="470" class="line"/>
+  <line x1="300" y1="545" x2="620" y2="545" class="dim"/>
+  <text x="430" y="570" class="label">基线 B = 80 mm</text>
+
+  <!-- Optical axes -->
+  <line x1="300" y1="470" x2="300" y2="105" class="dash"/>
+  <line x1="620" y1="470" x2="620" y2="105" class="dash"/>
+  <text x="236" y="128" class="small">左光轴</text>
+  <text x="636" y="128" class="small">右光轴</text>
+
+  <!-- Image planes at f -->
+  <line x1="190" y1="350" x2="410" y2="350" class="plane"/>
+  <line x1="510" y1="350" x2="730" y2="350" class="plane"/>
+  <text x="206" y="326" class="label">左等效成像平面 π_L</text>
+  <text x="526" y="326" class="label">右等效成像平面 π_R</text>
+
+  <!-- Focal length dimension -->
+  <line x1="258" y1="350" x2="258" y2="470" class="dim"/>
+  <text x="214" y="416" class="label">f / fx_px</text>
+  <line x1="660" y1="350" x2="660" y2="470" class="dim"/>
+  <text x="672" y="416" class="label">f / fx_px</text>
+
+  <!-- World point -->
+  <circle cx="500" cy="120" r="7" class="point"/>
+  <text x="516" y="112" class="label">空间目标点 P(X, Z)</text>
+  <line x1="500" y1="120" x2="500" y2="470" class="dash"/>
+  <line x1="790" y1="120" x2="790" y2="470" class="dim"/>
+  <text x="806" y="302" class="label">深度 Z</text>
+
+  <!-- Projection rays -->
+  <line x1="300" y1="470" x2="500" y2="120" class="ray"/>
+  <line x1="620" y1="470" x2="500" y2="120" class="ray"/>
+  <text x="350" y="230" class="small">左投影光线</text>
+  <text x="548" y="230" class="small">右投影光线</text>
+
+  <!-- Projection points on image planes -->
+  <circle cx="369" cy="350" r="5.5" class="point"/>
+  <circle cx="579" cy="350" r="5.5" class="point"/>
+  <circle cx="300" cy="350" r="4" fill="#0f766e"/>
+  <circle cx="620" cy="350" r="4" fill="#0f766e"/>
+  <text x="376" y="373" class="label">u_L</text>
+  <text x="536" y="373" class="label">u_R</text>
+  <text x="282" y="373" class="tiny">c_L</text>
+  <text x="625" y="373" class="tiny">c_R</text>
+
+  <!-- Local image coordinate offsets -->
+  <line x1="300" y1="388" x2="369" y2="388" class="dim"/>
+  <text x="308" y="410" class="small">u_L - c_x</text>
+  <line x1="579" y1="388" x2="620" y2="388" class="dim"/>
+  <text x="548" y="410" class="small">c_x - u_R</text>
+
+  <!-- Formula box -->
+  <rect x="60" y="70" width="390" height="122" class="note"/>
+  <text x="82" y="100" class="label">校正后水平视差：</text>
+  <text x="82" y="130" class="label">d = u_L - u_R</text>
+  <text x="82" y="160" class="label">d = fx_px · B / Z</text>
+  <text x="82" y="188" class="label">Z = fx_px · B / d</text>
+
+  <!-- Assumption box -->
+  <rect x="650" y="70" width="285" height="112" class="note"/>
+  <text x="670" y="100" class="small">前提：</text>
+  <text x="670" y="126" class="small">1. 左右相机已完成标定</text>
+  <text x="670" y="150" class="small">2. 已去畸变并极线校正</text>
+  <text x="670" y="174" class="small">3. 同一点落在同一图像行</text>
+</svg>
