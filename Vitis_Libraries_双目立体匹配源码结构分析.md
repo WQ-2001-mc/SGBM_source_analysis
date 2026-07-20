@@ -1,6 +1,6 @@
-# Vitis Libraries 双目深度与 SGBM 源码结构分析
+# Vitis Libraries 双目立体匹配源码结构分析（SGBM 与 SAD_BM）
 
-> 分析对象：`/home/hcc/Desktop/HXB/FPGA_HKCamera_SGBM/SGBM源码分析/Vitis_Libraries`  
+> 分析对象：AMD/Xilinx `Vitis_Libraries` 中的双目立体匹配与深度相关开源代码
 > 仓库版本：`v2026.1_re`，commit `629b2c979f65561f07e4e87b860f306cb480895e`  
 > 文档整理日期：2026-07-13  
 > 说明：本文以当前本地源码为准，并结合 AMD Vitis Vision 2026.1 官方文档说明 API 的设计目的、构建层级和正确使用方式。
@@ -58,7 +58,7 @@
 这个仓库中与双目深度直接相关的代码可以分成五组：
 
 1. **PL 侧 SGBM（Semi-Global Block Matching）**：`xf::cv::SemiGlobalBM`。
-2. **PL 侧局部块匹配 StereoBM**：`xf::cv::StereoBM`。
+2. **PL 侧 SAD_BM（StereoBM/SADBlockMatching）局部块匹配**：`xf::cv::StereoBM`。
 3. **双目标定参数生成校正映射 + Remap + StereoBM 的完整视差流水线**：`stereopipeline`。
 4. **视差到深度或三维点的转换**：`xf::cv::depth3D` 和 `xf::cv::reprojectimageto3D`。
 5. **AIE-ML 侧 Stereo Block Matching**：面向带 AI Engine 的 Versal 平台，与 PL 侧 `xf_stereolbm.hpp` 是另一套实现。
