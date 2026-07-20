@@ -2,15 +2,21 @@
 
 > 分析对象：本仓库 `Vitis_Libraries/vision` 子模块，代码基线为 `v2026.1_re`、HEAD `629b2c979f65561f07e4e87b860f306cb480895e`。
 > 主流程以 `L2/examples/stereolbm` 的 Vitis host + HLS kernel 为准；`L1/examples/stereolbm` 主要用于 HLS/C 仿真，不代表完整的板卡运行时流程。
-> 术语说明：仓库的 L2 示例在 Alveo U200 上验证，此时“PS 侧”实际是外部 x86 host CPU；若部署到 Zynq/MPSoC，则这些 host 职责通常落在 PS。本文用“Host/PS”统一表示软件侧，用“PL”表示 HLS 综合出的 FPGA kernel。
+> 术语说明：仓库随附的 L2 公开性能表在 Alveo U200 上验证，此时“PS 侧”实际是外部 x86 host CPU；若部署到 Zynq/MPSoC，则这些 host 职责通常落在 PS。本文用“Host/PS”统一表示软件侧，用“PL”表示 HLS 综合出的 FPGA kernel。
 
 ## 目录
 
+- [0. 默认设备与 FPGA 硬件资源](#0-默认设备与-fpga-硬件资源)
+  - [0.1 “默认运行设备”的准确含义](#01-默认运行设备的准确含义)
+  - [0.2 U200 实测资源与性能](#02-u200-实测资源与性能)
+  - [0.3 资源数据的适用边界](#03-资源数据的适用边界)
 - [1. 结论摘要](#1-结论摘要)
+  - [1.1 实际使用的 Sobel 算子](#11-实际使用的-sobel-算子)
 - [2. 默认配置与输入/输出契约](#2-默认配置与输入输出契约)
 - [3. PS/PL 边界与全流程](#3-pspl-边界与全流程)
   - [3.1 逐步函数映射](#31-逐步函数映射)
   - [3.2 `xFSADBlockMatching` 专项分解](#32-xfsadblockmatching-专项分解)
+  - [3.3 FPGA IP 核与电路结构图](#33-fpga-ip-核与电路结构图)
 - [4. PL 内部算法细节](#4-pl-内部算法细节)
   - [4.1 预处理：Sobel-X + clip](#41-预处理sobel-x--clip)
   - [4.2 行缓存、视差分组和窗口](#42-行缓存视差分组和窗口)
@@ -31,16 +37,101 @@
 - [10. 关键源码索引](#10-关键源码索引)
 - [11. 验证结论](#11-验证结论)
 
+## 0. 默认设备与 FPGA 硬件资源
+
+### 0.1 “默认运行设备”的准确含义
+
+该示例需要区分**构建脚本默认值**与**仓库公开的实体板卡验证基线**：
+
+| 口径 | 设备/模式 | 源码依据 | 结论 |
+|---|---|---|---|
+| 无参数构建默认值 | `PLATFORM=vck190`、`TARGET=hw_emu` | `L2/examples/stereolbm/Makefile:52-61` | 默认面向 VCK190 平台执行硬件仿真，不会直接运行在实体 FPGA 板卡上 |
+| 支持的平台 | `vck190`、`u200` | `Makefile:67-69`、`description.json` | 可显式选择 VCK190 或 Alveo U200；U280、U250 被列入禁用名单 |
+| 实体硬件运行 | 用户通过 `TARGET=hw` 和 `PLATFORM` 指定 | `Makefile:22-25, 142-148` | XCLBIN 与目标平台绑定，不能把为一块板卡生成的 XCLBIN 直接用于另一块板卡 |
+| 仓库公开验证基线 | Alveo U200，300 MHz | `docs/src/stereolbm-bm.rst:54-69` | 下节的资源量和 FPS 均来自 U200 实测/实现结果，不是 VCK190 资源报告 |
+
+因此，对“默认运行在哪个设备上”的准确回答是：**当前代码无参数时默认面向 VCK190 做 `hw_emu`；仓库给出的 SAD-BM 实体 FPGA 基准则运行在 Alveo U200 上。** kernel 的编译与链接目标频率均设为 300 MHz（`Makefile:150-159`）。
+
+两类平台的 Host/PS 形态也不同：U200 是 PCIe 加速卡，由外部 x86 Host 通过 XRT/OpenCL 调度；VCK190 是 Versal 开发平台，Host 程序按 AArch64/嵌入式方式构建。Host 最终选择枚举到的设备并装载与该设备名匹配的 XCLBIN，而 SAD-BM 主体均在可编程逻辑中执行。
+
+按器件总资源口径，两块目标平台的 LUT 容量为：
+
+| 平台 | LUT 总量 | 相对关系 |
+|---|---:|---:|
+| VCK190 | **899,840** | U200 的约 100.9% |
+| AMD Alveo™ U200 | **892K（约 892,000）** | VCK190 的约 99.1% |
+
+这里的 LUT 总量是器件容量，不是 SAD-BM kernel 的实际占用。按图示规格，VCK190 的 LUT 总量比 U200 约多 0.9%，两者容量基本相当；跨平台实现还会受器件架构、综合和布局布线影响，不能仅按总量比例推导 VCK190 的实际资源报告。
+
+### 0.2 U200 实测资源与性能
+
+当前默认算法模板为 `WSIZE=11`、`NDISP=32`、`PARALLEL_UNITS=32`、`NPPC=1`、`XF_USE_URAM=0`，最大图像尺寸为 FHD 1920×1080。与这一 FHD 配置对应的 U200 公开资源如下；4K 行仅作为分辨率扩展时的对照。
+
+| 分辨率 | NPPC | 并行视差/总视差 | LUT | 占 U200 总 LUT（892K） | FF | BRAM | DSP | FPGA 性能 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **FHD 1920×1080（当前默认）** | 1 | 32 / 32 | **==19,380==** | **约 2.17%** | **20,670** | **13** | **7** | **135 FPS** |
+| 4K 3840×2160（对照） | 1 | 32 / 32 | ==19,005== | 约 2.13% | 21,113 | 26 | 7 | 34 FPS |
+
+资源数字来自 `docs/src/stereolbm-bm.rst:71-98`，是该 L2 StereoLBM 设计在 U200、300 MHz 下的报告值。`XF_USE_URAM=0` 表示当前配置没有要求把主要缓存显式映射到 UltraRAM；原资源表没有单列 URAM，不能仅据此推导一个跨平台通用的 URAM 占用数。
+
+若只把同一 LUT 数量与 VCK190 的 899,840 个总 LUT 作算术对照，FHD 的 19,380 LUT 约为 2.15%，4K 的 19,005 LUT 约为 2.11%。这两个百分比仅用于容量尺度比较，并非 VCK190 综合/实现后的实际占用率。
+
+从资源结构看，LUT/FF 主要用于 32 路并行 SAD、比较树、控制与流水寄存器，BRAM 主要用于左右图行缓存和跨列状态。4K 配置的 BRAM 从 13 增至 26，而 LUT、FF、DSP 基本不变，符合图像宽度扩大主要增加行缓存深度、而计算并行结构保持不变的实现特征。
+
+### 0.3 资源数据的适用边界
+
+- 仓库内没有随附当前 VCK190 默认平台的 `csynth`/实现资源报告，因此不能把上述 U200 数字直接标成 VCK190 占用；若目标是 VCK190，应以该平台重新生成的 HLS synthesis、link/implementation 报告为准。
+- `api-reference.rst:16947-17002` 还有一组 Vivado HLS 2019.1、XCZU9EG/XCZU7EV 的历史函数级数据。例如相同 `HD_11_32_32` 参数曾报告 49 BRAM_18K、20 DSP48E、34,519 FF 和 31,978 LUT。由于工具版本、器件和统计层级都不同，这组历史数据不能与当前 U200 L2 基准混用。
+- 资源会随 `WSIZE`、`NDISP`、`PARALLEL_UNITS`、最大 `WIDTH`、`USE_URAM` 及目标时钟变化。尤其增加 `PARALLEL_UNITS` 会扩展 SAD/WTA 并行硬件，增加 `WIDTH` 则主要扩大行缓存；表中数字只代表列出的参数组合。
+
 ## 1. 结论摘要
 
 - 对外 API 名称是 `xf::cv::StereoBM`，真正执行滑窗 SAD 的内部函数是 `xFSADBlockMatching`。
-- 完整硬件数据通路为：两个灰度输入 → 两路 3×3 Sobel-X 与截断 → 行缓存/滑动窗口 → 分组并行 SAD → WTA 最小代价 → 纹理、边界与唯一性过滤 → 亚像素插值 → 16 位 Q12.4 视差图。
+- 完整硬件数据通路为：两个==灰度==输入 → 两路 3×3 Sobel-X 与截断 → 行缓存/滑动窗口 → 分组并行 SAD → WTA 最小代价 → 纹理、边界与唯一性过滤 → 亚像素插值 → 16 位 Q12.4 视差图。
 - 当前默认配置是 1920×1080 最大尺寸、`WSIZE=11`、`NDISP=32`、`PARALLEL_UNITS=32`、`NPPC=1`、`USE_URAM=0`，目标时钟 300 MHz。
 - 有两层主要并行：任务级 `DATAFLOW` 并行，以及 32 路视差候选并行；像素并行固定为 `XF_NPPC1`，因此即使 32 个视差一次算完，峰值仍只有 1 个输出像素/周期。
 - 首要吞吐瓶颈是 `sweepFactor = NDISP / PARALLEL_UNITS`。默认值为 1；若只扩大视差范围而不增加 `PARALLEL_UNITS`，PL 核心延迟近似按 sweep 数线性增加。
 - 当前 L2 host 使用阻塞式 H2D 写入、单次 `enqueueTask`、阻塞式 D2H 读回，没有双缓冲和帧间传输/计算重叠；端到端系统中，这会成为 PL 之外的重要瓶颈。
 - 该示例**不包含双目标定、同步采集、去畸变或极线校正**，输入必须已经是同尺寸、同步且极线对齐的 8 位灰度图。仓库中的 `stereopipeline` 示例才把 `InitUndistortRectifyMapInverse`、`remap` 和 `StereoBM` 串为更上游的完整立体流水线。
 - 源码级限制：host 虽传入 `minDisparity`，当前 `xFSADBlockMatching` 实际只搜索并输出 `0...NDISP-1`，没有使用 `state.minDisparity` 偏移；因此非零最小视差配置当前无效。
+
+### 1.1 实际使用的 Sobel 算子
+
+设输入灰度图为 $I(y,x)$。StereoBM 预处理在 `xFStereoPreProcess` 中固定调用 3×3 Sobel；虽然接口同时生成 $G_x$ 和 $G_y$，但后续只保留 $G_x$，$G_y$ 被读出后丢弃。源码中实际使用的 Sobel-X 核为：
+
+$$
+K_x=
+\begin{bmatrix}
+-1 & 0 & 1\\
+-2 & 0 & 2\\
+-1 & 0 & 1
+\end{bmatrix}.
+$$
+
+因此内部非边界像素的水平梯度为：
+
+$$
+\begin{aligned}
+G_x(y,x)
+&=\sum_{v=-1}^{1}\sum_{u=-1}^{1}K_x(v,u)I(y+v,x+u)\\
+&=\big[I(y-1,x+1)+2I(y,x+1)+I(y+1,x+1)\big]\\
+&\quad-\big[I(y-1,x-1)+2I(y,x-1)+I(y+1,x-1)\big].
+\end{aligned}
+$$
+
+这里的“X”表示对水平方向 $x$ 求差分，所以它对左右灰度变化敏感，主要增强竖直边缘。真正送入 SAD 的不是有符号梯度 $G_x$，而是以 $C=\mathtt{preFilterCap}$ 限幅并平移后的 8 位无符号值：
+
+$$
+P_C(y,x)=\operatorname{clip}\!\left(G_x(y,x),-C,C\right)+C
+=
+\begin{cases}
+0, & G_x<-C,\\
+G_x+C, & -C\le G_x\le C,\\
+2C, & G_x>C.
+\end{cases}
+$$
+
+默认 $C=31$，所以 $P_C\in[0,62]$；图像最外一圈像素会先被强制令 $G_x=0$，因此映射后的边界值为 31。左右图分别执行同一变换，后续 SAD 实际比较的是 $P_C^L$ 与 $P_C^R$。对应源码为 `L1/include/imgproc/xf_sobel.hpp:32-80`（3×3 Sobel-X 核及计算）和 `L1/include/imgproc/xf_stereolbm.hpp:598-711`（边界处理、限幅平移及 StereoBM 预处理调用）。
 
 ## 2. 默认配置与输入/输出契约
 
@@ -195,6 +286,20 @@ N = H×W                      // 最终输出像素数
 
 计算量解释：表中的数值是**每帧逻辑运算/状态更新次数**，用来判断面积、布线和算法热点；它们不是串行周期数。窗口、候选状态和比较树被数组分割、循环展开或纳入 `II=1` 流水后，大量操作在同一周期并发。例如默认配置约 740.5 M 次逻辑绝对差被组织在约 2.104 M 个列流水周期中，等价于每个列周期最多并行处理 `U×K=352` 个 SAD 像素差。实际是否达到 II=1、具体实例化多少算术单元，仍须以目标器件的 HLS schedule/`csynth.rpt` 为准。
 
+### 3.3 FPGA IP 核与电路结构图
+
+![Vitis Vision SAD-BM / StereoBM FPGA IP 核与电路数据流](figures/sad_bm_fpga_architecture.svg)
+
+> 图中的“结构规模”是由数组维度、数据类型和 HLS pragma 直接推导的源码级逻辑容量；“器件规模”则引用仓库随附的 U200 整核实现报告。数组 bit 容量不等于 BRAM 块数，逻辑工作量也不等于最终实体算术单元数；各子模块的 LUT/FF/BRAM/DSP 分摊必须由目标器件的层次化 `csynth`/实现报告给出。
+
+读图顺序为：
+
+- **a：整核 HLS DATAFLOW**。展示四组 AXI 内存端口、两路 3×3 Sobel-X 预处理、SAD-BM 核心及 16 位 Q12.4 输出。
+- **b：`xFSADBlockMatching` 放大电路**。重点标出双目行缓存、完全分割的滑窗寄存器、32 路增量 SAD、5 级 WTA 比较树、过滤及亚像素输出。
+- **c：规模与证据边界**。默认 FHD 配置在 U200、300 MHz 下的整核报告为 **19,380 LUT、20,670 FF、13 BRAM、7 DSP、135 FPS**；仓库没有给出对应的子模块资源拆分。
+
+原图为 SVG 矢量格式，可无损放大并选中文字；`figures/sad_bm_fpga_architecture.png` 和 `.pdf` 为同源导出版。
+
 ## 4. PL 内部算法细节
 
 ### 4.1 预处理：Sobel-X + clip
@@ -336,10 +441,10 @@ T_SAD ≈ 7.012 ms
 
 仓库 `docs/src/stereolbm-bm.rst` 给出的 U200 实测/验证结果为 FHD 135 FPS、4K 34 FPS；与包含边界和系统开销后的周期模型一致。文档还给出：
 
-| U200、300 MHz、NPPC1、`NDISP=32`、`PARALLEL_UNITS=32` | LUT | BRAM | FF | DSP | FPGA FPS | CPU FPS |
-|---|---:|---:|---:|---:|---:|---:|
-| FHD 1920×1080 | 19,380 | 13 | 20,670 | 7 | 135 | 35 |
-| 4K 3840×2160 | 19,005 | 26 | 21,113 | 7 | 34 | 13 |
+| U200、300 MHz、NPPC1、`NDISP=32`、`PARALLEL_UNITS=32` | LUT | 占 U200 总 LUT（892K） | BRAM | FF | DSP | FPGA FPS | CPU FPS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| FHD 1920×1080 | 19,380 | 约 2.17% | 13 | 20,670 | 7 | 135 | 35 |
+| 4K 3840×2160 | 19,005 | 约 2.13% | 26 | 21,113 | 7 | 34 | 13 |
 
 注意：该 L2 资源表只明确写出 NPPC、视差数和并行单元；当前示例配置中的窗口为 11，但表格自身未再次标注窗口大小。表中 CPU/FPGA FPS 是特定平台与构建结果，不应当直接外推到任意 Zynq 器件。
 

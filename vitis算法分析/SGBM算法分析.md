@@ -7,6 +7,10 @@
 
 ## 目录
 
+- [0. 默认 FPGA 平台与仓库资源数据](#0-默认-fpga-平台与仓库资源数据)
+  - [0.1 默认设备与构建模式](#01-默认设备与构建模式)
+  - [0.2 仓库自带的 SGBM 资源用量](#02-仓库自带的-sgbm-资源用量)
+  - [0.3 数据适用边界](#03-数据适用边界)
 - [1. 结论摘要](#1-结论摘要)
 - [2. 分析范围与两套示例的关系](#2-分析范围与两套示例的关系)
 - [3. 端到端 PS/PL 数据流](#3-端到端-pspl-数据流)
@@ -37,6 +41,49 @@
 - [11. 参数调整的性能/资源趋势](#11-参数调整的性能资源趋势)
 - [12. 源码证据索引](#12-源码证据索引)
 - [13. 最终判断](#13-最终判断)
+
+## 0. 默认 FPGA 平台与仓库资源数据
+
+### 0.1 默认设备与构建模式
+
+SGBM 的 L1 与 L2 示例面向不同流程，必须分别理解其“默认”含义：
+
+| 代码层级/口径 | 默认平台或器件 | 默认目标 | 频率设置 | 准确含义 |
+|---|---|---|---:|---|
+| L2 系统示例，无参数执行 Makefile | `vck190` | `hw_emu` | VCK190 请求 100 MHz | 默认面向 VCK190 平台构建硬件仿真，不会直接在实体板卡上运行 |
+| L2 显式选择实体硬件 | `vck190` 或 `u200` | 需指定 `TARGET=hw` | VCK190 请求 100 MHz；U200 分支请求 300 MHz | 两个平台均在 allowlist 中；生成的 XCLBIN 与所选平台绑定 |
+| L1 当前 Makefile | `xilinx_vck190_base_202610_1` | `csim` | HLS 配置时钟周期 3.3 ns | 默认只做 C 仿真；平台名用于需要器件信息的后续 HLS/实现流程，`csim` 本身不是 FPGA 板上运行 |
+| L1 保留的旧 `run_hls.tcl` | `xcu200-fsgd2104-2-e` | 由脚本参数选择 | 3.3 ns | 该脚本硬编码的是 Alveo U200 所用器件，不代表当前 L1/L2 Makefile 的默认平台 |
+
+L2 Makefile 的平台 allowlist 是 `vck190 u200`，blocklist 是 `u280 u250 zcu104`。因此，对当前仓库“默认 FPGA 设备”的准确表述是：**L2 无参数构建默认选择 VCK190，但默认运行模式为 `hw_emu`；若要在实体 VCK190 或 U200 上运行，必须显式选择 `TARGET=hw` 并使用匹配的平台文件。** L2 Makefile 只写平台选择器 `vck190`，具体 FPGA part 由所安装的 `.xpfm` 平台文件解析，并未在该 Makefile 中硬编码。
+
+### 0.2 仓库自带的 SGBM 资源用量
+
+仓库 `docs/src/api-reference.rst:16821-16850` 包含 `SemiGlobalBM Function Resource Utilization Summary` 和性能估计表。原表给出的条件与结果如下：
+
+| 图像与算法条件 | 数值 |
+|---|---:|
+| 分辨率 | 1920×1080（FHD） |
+| Operating Mode | 1 pixel/clock |
+| Census Filter Size | 5×5 |
+| 视差数 `NDISP` | 64 |
+| 并行单元 `PU` | 32 |
+| 资源表工作频率 | 200 MHz |
+| **LUT** | **19,102** |
+| **FF** | **11,856** |
+| **BRAM_18K** | **205** |
+| **DSP48E** | **141** |
+| 性能估计 | 42 ms/frame（约 23.8 FPS） |
+
+其中 LUT 的单位是“个 LUT 逻辑资源”，所以 `19,102` 表示 19,102 个 LUT，而不是 19,102K。`BRAM_18K=205` 和 `DSP48E=141` 同样是资源实例数。该组算法条件与当前 L2 配置的 FHD、5×5 Census、`NDISP=64`、`PU=32` 相符；当前源码还配置了 `NUM_DIR=4`、`P1=20`、`P2=40`，但仓库资源表没有明确注明路径数 `R` 和惩罚参数。
+
+### 0.3 数据适用边界
+
+- 资源表的列标题明确写的是 `Utilization Estimate`。它是仓库 API 文档中的函数级资源估计，不是本文重新综合得到的数据。
+- 该 SGBM 表没有注明生成数据所用的 FPGA 型号、板卡平台或 Vitis/Vivado HLS 版本。因此不能把 **19,102 LUT、205 BRAM_18K、141 DSP48E** 标成 VCK190 或 U200 的实际实现结果。
+- 表中的 200 MHz 是资源/性能估计条件，不等于当前 L2 默认 VCK190 分支请求的 100 MHz，也不等于 U200 分支请求的 300 MHz。请求频率本身也不保证实现后能够 timing closure。
+- 本地仓库没有随附 SGBM 的 `csynth` 报告、place-and-route utilization/timing 报告或类似 StereoLBM 的独立板卡 benchmark 文档；目前能直接引用的 SGBM LUT 数字只有上述 API 文档估计。
+- 若要得到目标 VCK190 或 U200 的真实占用率，应使用当前参数对对应平台重新执行 HLS synthesis 和 Vitis link/implementation，并以生成报告中的 LUT、BRAM、DSP、FF 与实际 Fmax 为准。
 
 ## 1. 结论摘要
 
@@ -70,6 +117,10 @@
 以下“PS”按 VCK190 这类嵌入式平台表述；对 U200，应把 PS 理解为外部 x86 host。L1 testbench 则是开发机上的仿真程序，不等同于板上 PS 软件。
 
 ## 3. 端到端 PS/PL 数据流
+
+![Vitis Vision SGBM FPGA IP 核电路结构与数据流](figures/sgbm_fpga_architecture.svg)
+
+> **图 1｜SGBM FPGA IP 核结构框图。** 蓝色箭头表示像素/代价主数据流，橙色箭头表示路径历史状态反馈，灰色虚线表示 AXI4-Lite 控制。模块内标注的是源码可以确定的位宽、并行度和状态数组规模；右下角 LUT/FF/BRAM/DSP 是仓库 API 文档给出的**整核估算**，文档没有提供各子模块资源分摊，也没有注明该估算对应的目标 FPGA。可编辑 [SVG](figures/sgbm_fpga_architecture.svg)、[PDF](figures/sgbm_fpga_architecture.pdf) 和 [PNG](figures/sgbm_fpga_architecture.png) 均保存在本文档同级的 `figures/` 目录。
 
 ```text
 PS / Host
@@ -389,11 +440,13 @@ Lr_min[R-1][COLS]      : (4-1)×1920    =   5,760 byte = 5.625 KiB
 | 路径状态、BRAM 分区、PU×R 展开和 `II=2` | `L1/include/imgproc/xf_sgbm.hpp:486-838` |
 | WTA 最小值与视差输出 | `L1/include/imgproc/xf_sgbm.hpp:840-889` |
 | 核心 DATAFLOW 调用顺序和参数断言 | `L1/include/imgproc/xf_sgbm.hpp:891-1005` |
-| L2 平台、host 架构与请求频率 | `L2/examples/sgbm/Makefile:52-69,88-98,150-170` |
+| L2 默认 `hw_emu`/VCK190、平台名单与请求频率 | `L2/examples/sgbm/Makefile:52-69,153-170` |
+| L1 当前默认平台、`csim` 与 3.3 ns 时钟 | `L1/examples/sgbm/Makefile:49-55`、`L1/examples/sgbm/hls_config.tmpl:1-8` |
+| L1 保留脚本中的 U200 part | `L1/examples/sgbm/run_hls.tcl:26-46` |
 | 官方算法说明、资源与 42 ms 性能估计 | `docs/src/api-reference.rst:16728-16850` |
 
 ## 13. 最终判断
 
-对当前 `D=64, PU=32, R=4` 配置，SGBM 核是一个以 **32 路视差并行 + 4 路路径并行 + 帧内 DATAFLOW** 为核心的 PL 流式实现。其计算性能主要由路径聚合的 `2×(D/PU)` cycle/pixel 决定，资源主要由按路径、视差分 bank 的 `Lr` 历史状态决定。默认 1080p@200 MHz 的约 42 ms 是有源码循环结构支持的合理估计，但 VCK190 示例实际请求的是 100 MHz，且端到端程序还有阻塞式数据搬运及极重的 CPU reference，不能把 42 ms 直接等同于示例总运行时间或产品帧率。
+对当前 `D=64, PU=32, R=4` 配置，SGBM 核是一个以 **32 路视差并行 + 4 路路径并行 + 帧内 DATAFLOW** 为核心的 PL 流式实现。其计算性能主要由路径聚合的 `2×(D/PU)` cycle/pixel 决定，资源主要由按路径、视差分 bank 的 `Lr` 历史状态决定。API 文档在 1080p@200 MHz 条件下给出的约 42 ms 是有源码循环结构支持的合理估计，但 L2 默认 VCK190 分支实际请求的是 100 MHz，且端到端程序还有阻塞式数据搬运及极重的 CPU reference，不能把 42 ms 直接等同于默认示例总运行时间或产品帧率。
 
 在产品级使用前，应以已校正的真实双目数据重新验证视差质量，修正 test 的漏检条件，并在目标板上分别测量 kernel-only、H2D/kernel/D2H 和包含前后处理的端到端帧率。
